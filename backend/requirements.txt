@@ -1,0 +1,10 @@
+Flask
+Flask-SQLAlchemy
+Flask-CORS
+requests
+numpy
+pandas
+scikit-learn
+python-dotenv
+openai
+gunicorn
