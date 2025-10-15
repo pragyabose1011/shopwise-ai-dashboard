@@ -3,7 +3,7 @@ import pandas as pd
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.feature_extraction.text import TfidfVectorizer
 from models import db, Product, User, Interaction, Recommendation
-from sqlalchemy import func
+from sqlalchemy import func, select
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -48,35 +48,49 @@ class RecommendationEngine:
             logger.error(f"Error generating recommendations for user {user_id}: {e}")
             return self._get_popular_recommendations(user_id, num_recommendations)
 
+    from sqlalchemy import func, select
+
     def _get_popular_recommendations(self, user_id, num_recommendations):
         """Get popular products as fallback recommendations"""
         try:
-            # Get products with most interactions, excluding user's already interacted products
-            user_product_ids = db.session.query(Interaction.product_id).filter_by(user_id=user_id).subquery()
+            # Subquery of product IDs the user has interacted with
+            user_product_ids = (
+                db.session.query(Interaction.product_id)
+                .filter_by(user_id=user_id)
+                .subquery()
+            )
 
-            popular_products = db.session.query(
-                Product.id,
-                func.count(Interaction.id).label('interaction_count')
-            ).outerjoin(Interaction).filter(
-                ~Product.id.in_(user_product_ids)
-            ).group_by(Product.id).order_by(
-                func.count(Interaction.id).desc()
-            ).limit(num_recommendations).all()
+            # FIX: wrap subquery in select() for IN clause
+            popular_products = (
+                db.session.query(
+                    Product.id,
+                    func.count(Interaction.id).label("interaction_count"),
+                )
+                .outerjoin(Interaction)
+                .filter(~Product.id.in_(select(user_product_ids.c.product_id)))
+                .group_by(Product.id)
+                .order_by(func.count(Interaction.id).desc())
+                .limit(num_recommendations)
+                .all()
+            )
 
-            recommendations = []
-            for product_id, count in popular_products:
-                recommendations.append({
-                    'product_id': product_id,
-                    'score': min(0.8, count / 10.0),  # Normalize score
-                    'algorithm': 'popularity',
-                    'explanation': f"This is a popular product with {count} user interactions. Perfect for discovering trending items!"
-                })
+            recommendations = [
+                {
+                    "product_id": product_id,
+                    "score": min(0.8, count / 10.0),
+                    "algorithm": "popularity",
+                    "explanation": f"This is a popular product with {count} user interactions. Perfect for discovering trending items!",
+                }
+                for product_id, count in popular_products
+            ]
 
             return recommendations
 
         except Exception as e:
             logger.error(f"Error getting popular recommendations: {e}")
+            import traceback; traceback.print_exc()
             return []
+
 
     def _collaborative_filtering(self, user_id, num_recommendations):
         """User-based collaborative filtering"""
